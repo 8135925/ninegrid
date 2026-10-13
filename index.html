@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>九宫格切图 · 朋友圈切片工具</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<style>
+  body{font-family:'Inter',sans-serif;background-color:#0f172a;color:#e2e8f0;-webkit-tap-highlight-color:transparent}
+
+  /* 虚线上传区 */
+  .uploader{border:2px dashed #334155;border-radius:16px;transition:all .3s}
+  .uploader:hover,.uploader.over{background:rgba(30,41,59,.5);border-color:#6366f1}
+
+  /* 可拖拽裁剪框：四周暗色遮罩 + 网格线 */
+  #frame{
+    position:absolute;
+    box-shadow:0 0 0 9999px rgba(0,0,0,.7);
+    border:2px solid #6366f1;
+    cursor:grab;
+    z-index:20;
+    display:grid;
+    touch-action:none;
+  }
+  #frame:active{cursor:grabbing;border-color:#a5b4fc}
+  .fcell{
+    border:1px solid rgba(255,255,255,.3);
+    display:flex;align-items:center;justify-content:center;
+    font-size:10px;color:rgba(255,255,255,.7);font-weight:bold;
+    pointer-events:none;
+  }
+
+  .mode-btn.on{background:#4f46e5;border-color:#4f46e5;color:#fff}
+  .no-scrollbar::-webkit-scrollbar{display:none}
+
+  .field{
+    background:#1e293b;border:1px solid #334155;color:#fff;
+    padding:4px 8px;border-radius:4px;font-size:12px;width:100%;
+  }
+
+  /* 滑块 */
+  input[type=range]{-webkit-appearance:none;width:100%;background:transparent}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;height:14px;width:14px;border-radius:50%;
+    background:#6366f1;cursor:pointer;margin-top:-5px;
+    box-shadow:0 0 0 2px rgba(99,102,241,.2);
+  }
+  input[type=range]::-webkit-slider-runnable-track{
+    width:100%;height:4px;cursor:pointer;background:#334155;border-radius:2px;
+  }
+
+  /* 朋友圈卡片 */
+  .chat-card{background:#1e1e1e;border-radius:8px;padding:16px;font-family:system-ui,-apple-system,sans-serif}
+  .chat-grid{display:grid;gap:4px}
+  .chat-grid img{width:100%;height:100%;object-fit:cover;aspect-ratio:1/1;background:#333}
+
+</style>
+</head>
+<body class="min-h-screen lg:h-screen flex flex-col lg:overflow-hidden">
+
+<!-- 顶栏 -->
+<header class="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-900 z-30 shrink-0 sticky top-0 lg:relative">
+  <div class="flex items-center gap-3">
+    <i class="ph ph-squares-four text-indigo-400 text-lg"></i>
+    <h1 class="text-sm font-bold text-slate-200 tracking-wide">九宫格切图 · 朋友圈切片工具</h1>
+  </div>
+  <button id="packBtn" disabled class="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white text-xs font-bold rounded-full transition shadow-lg">
+    <i class="ph ph-download-simple"></i> 打包下载
+  </button>
+</header>
+
+<div class="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+
+  <!-- 左侧控制栏 -->
+  <aside class="w-full lg:w-80 border-b lg:border-r border-slate-800 bg-slate-900/50 flex flex-col z-10 shrink-0">
+    <div class="p-4 border-b border-slate-800">
+      <div id="uploader" class="uploader h-24 lg:h-32 flex flex-col items-center justify-center cursor-pointer relative">
+        <input type="file" id="fileIn" accept="image/*" class="absolute inset-0 opacity-0 cursor-pointer z-10">
+        <div class="text-center pointer-events-none">
+          <i class="ph ph-image text-2xl text-slate-400 mb-1"></i>
+          <p class="text-xs font-bold text-slate-300">点击上传图片</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="p-4 space-y-6 flex-1">
+      <!-- COMPOSITION -->
+      <div>
+        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">COMPOSITION</div>
+        <div class="flex items-center justify-between bg-black/20 p-2 rounded border border-slate-800 mb-3">
+          <span class="text-xs text-slate-300 flex items-center gap-2"><i class="ph ph-crop"></i> 朋友圈模式（正方形）</span>
+          <input type="checkbox" id="squareOn" checked class="accent-indigo-500 w-4 h-4 cursor-pointer">
+        </div>
+        <div class="flex justify-between text-[10px] text-slate-400 mb-1">
+          <span>Zoom / Crop Size</span>
+          <span id="zoomText" class="text-indigo-400">100%</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <i class="ph ph-minus text-slate-500 text-xs"></i>
+          <input type="range" id="zoomBar" min="10" max="100" value="100" disabled class="disabled:opacity-50 flex-1">
+          <i class="ph ph-plus text-slate-500 text-xs"></i>
+        </div>
+      </div>
+
+      <!-- GRID LAYOUT -->
+      <div>
+        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">GRID LAYOUT</div>
+        <div class="grid grid-cols-4 gap-2 mb-3">
+          <button data-r="3" data-c="3" class="mode-btn on p-2 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 transition" title="九宫格"><i class="ph ph-squares-four"></i></button>
+          <button data-r="2" data-c="2" class="mode-btn p-2 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 transition" title="四宫格"><i class="ph ph-grid-four"></i></button>
+          <button data-r="3" data-c="1" class="mode-btn p-2 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 transition" title="全景三联"><i class="ph ph-rows"></i></button>
+          <button data-r="1" data-c="3" class="mode-btn p-2 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 transition" title="横向长图"><i class="ph ph-columns"></i></button>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-800/50 p-2 rounded border border-slate-800">
+          <div class="flex-1">
+            <label class="text-[9px] text-slate-500 block mb-1">ROWS (行)</label>
+            <input type="number" id="rowIn" value="3" min="1" max="20" class="field text-center">
+          </div>
+          <div class="text-slate-600 pt-3">×</div>
+          <div class="flex-1">
+            <label class="text-[9px] text-slate-500 block mb-1">COLS (列)</label>
+            <input type="number" id="colIn" value="3" min="1" max="20" class="field text-center">
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPORT -->
+      <div class="border-t border-slate-800 pt-4">
+        <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">EXPORT</div>
+        <div class="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <label class="text-[9px] text-slate-500 block mb-1">FORMAT</label>
+            <select id="fmtSel" class="field cursor-pointer">
+              <option value="image/jpeg">JPG</option>
+              <option value="image/png">PNG</option>
+              <option value="image/webp">WEBP</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[9px] text-slate-500 block mb-1">PREFIX</label>
+            <input type="text" id="prefixIn" value="切片" class="field">
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 中间预览区 -->
+  <main class="flex-1 bg-[#0b1121] relative flex flex-col items-center p-4 lg:p-8 min-h-[400px] lg:min-h-0 overflow-hidden select-none border-b lg:border-b-0 border-slate-800">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:20px 20px"></div>
+
+    <div id="emptyHint" class="text-center relative z-10 my-auto">
+      <div class="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+        <i class="ph ph-image text-3xl text-slate-600"></i>
+      </div>
+      <p class="text-slate-500 text-sm font-medium">请先上传图片</p>
+    </div>
+
+    <div id="stage" class="relative hidden shadow-2xl w-fit max-w-full my-auto">
+      <img id="pic" class="block max-w-full max-h-[60vh] lg:max-h-[80vh] pointer-events-none" draggable="false" alt="">
+      <div id="frame"></div>
+    </div>
+  </main>
+
+  <!-- 右侧结果栏 -->
+  <aside class="w-full lg:w-80 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 transition-all min-h-[400px] lg:min-h-full">
+    <div class="p-2 border-b border-slate-800 bg-slate-900/90 backdrop-blur z-10 grid grid-cols-2 gap-1 sticky top-0">
+      <button id="tabList" class="flex items-center justify-center gap-2 py-2 rounded text-xs font-bold transition bg-slate-800 text-white"><i class="ph ph-list-dashes"></i> 清单</button>
+      <button id="tabChat" class="flex items-center justify-center gap-2 py-2 rounded text-xs font-bold transition text-slate-500 hover:bg-slate-800/50"><i class="ph ph-chat-circle-dots"></i> 朋友圈模拟</button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto no-scrollbar relative">
+      <div id="listView" class="p-3 flex flex-col gap-2">
+        <div class="text-center py-10 text-slate-600 text-xs italic">等待切片...</div>
+      </div>
+
+      <div id="chatView" class="p-4 hidden">
+        <div class="chat-card">
+          <div class="flex gap-3 mb-3">
+            <div class="w-10 h-10 rounded bg-indigo-500 shrink-0 flex items-center justify-center text-white font-bold text-sm">壹</div>
+            <div class="flex-1">
+              <div class="text-indigo-400 font-bold text-sm mb-1">小一</div>
+              <div class="text-slate-300 text-xs leading-relaxed">刚刚生成了一组完美的九宫格切片，这效果太绝了！👇</div>
+            </div>
+          </div>
+          <div id="chatGrid" class="chat-grid pl-[52px]"></div>
+          <div class="pl-[52px] mt-2 flex items-center justify-between">
+            <span class="text-[10px] text-slate-500">1分钟前</span>
+            <div class="bg-slate-700/50 rounded px-2 py-1 flex items-center gap-1">
+              <div class="w-1 h-1 bg-slate-400 rounded-full"></div>
+              <div class="w-1 h-1 bg-slate-400 rounded-full"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ================= 状态 ================= */
+let fileObj = null;
+let natW = 0, natH = 0;
+let rows = 3, cols = 3;
+let crop = {x:0, y:0, w:1, h:1};   // 相对显示尺寸的 0~1 比例
+
+const pic     = document.getElementById('pic');
+const frame   = document.getElementById('frame');
+const zoomBar = document.getElementById('zoomBar');
+const rowIn   = document.getElementById('rowIn');
+const colIn   = document.getElementById('colIn');
+
+/* ================= 图片载入 ================= */
+document.getElementById('fileIn').addEventListener('change', e => readFile(e.target.files[0]));
+const uploader = document.getElementById('uploader');
+['dragenter','dragover'].forEach(n => uploader.addEventListener(n, () => uploader.classList.add('over')));
+['dragleave','drop'].forEach(n => uploader.addEventListener(n, () => uploader.classList.remove('over')));
+
+function readFile(file){
+  if(!file || !file.type.startsWith('image/')) return;
+  fileObj = file;
+  const fr = new FileReader();
+  fr.onload = e => {
+    pic.src = e.target.result;
+    pic.onload = () => {
+      natW = pic.naturalWidth; natH = pic.naturalHeight;
+      document.getElementById('emptyHint').classList.add('hidden');
+      document.getElementById('stage').classList.remove('hidden');
+      document.getElementById('packBtn').disabled = false;
+      zoomBar.disabled = false;
+      restoreFrame();
+    };
+  };
+  fr.readAsDataURL(file);
+}
+
+/* ================= 裁剪框几何 ================= */
+function restoreFrame(){
+  zoomBar.value = 100;
+  document.getElementById('zoomText').innerText = '100%';
+  placeFrame(1.0);
+}
+
+function placeFrame(scale){
+  const squareMode = document.getElementById('squareOn').checked;
+  const pw = pic.offsetWidth, ph = pic.offsetHeight;
+  const ratio = squareMode ? cols/rows : pw/ph;
+
+  let bw, bh;
+  if(ratio > pw/ph){ bw = pw*scale; bh = bw/ratio; }
+  else             { bh = ph*scale; bw = bh*ratio; }
+
+  const left = (pw-bw)/2, top = (ph-bh)/2;
+  frame.style.width  = bw+'px';
+  frame.style.height = bh+'px';
+  frame.style.left   = left+'px';
+  frame.style.top    = top+'px';
+
+  crop = { x:left/pw, y:top/ph, w:bw/pw, h:bh/ph };
+  paintCells();
+  cut();
+}
+
+zoomBar.addEventListener('input', () => {
+  document.getElementById('zoomText').innerText = zoomBar.value+'%';
+  placeFrame(zoomBar.value/100);
+});
+document.getElementById('squareOn').addEventListener('change', () => placeFrame(zoomBar.value/100));
+
+/* ================= 行列设置 ================= */
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    rows = +btn.dataset.r; cols = +btn.dataset.c;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    rowIn.value = rows; colIn.value = cols;
+    restoreFrame();
+  });
+});
+[rowIn, colIn].forEach(inp => inp.addEventListener('input', () => {
+  rows = Math.max(1, parseInt(rowIn.value)||1);
+  cols = Math.max(1, parseInt(colIn.value)||1);
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('on'));
+  restoreFrame();
+}));
+
+/* ================= 裁剪框拖拽（鼠标+触摸） ================= */
+let dragging = false, px=0, py=0, baseL=0, baseT=0;
+const dragBegin = p => {
+  dragging = true;
+  px = p.clientX; py = p.clientY;
+  baseL = frame.offsetLeft; baseT = frame.offsetTop;
+};
+const dragMove = p => {
+  if(!dragging) return;
+  let nl = baseL + (p.clientX - px);
+  let nt = baseT + (p.clientY - py);
+  const pw = pic.offsetWidth, ph = pic.offsetHeight;
+  nl = Math.min(Math.max(nl, 0), pw - frame.offsetWidth);
+  nt = Math.min(Math.max(nt, 0), ph - frame.offsetHeight);
+  frame.style.left = nl+'px';
+  frame.style.top  = nt+'px';
+  crop.x = nl/pw; crop.y = nt/ph;
+  requestAnimationFrame(cut);
+};
+const dragEnd = () => { if(dragging){ dragging = false; cut(); } };
+
+frame.addEventListener('mousedown', dragBegin);
+window.addEventListener('mousemove', dragMove);
+window.addEventListener('mouseup', dragEnd);
+frame.addEventListener('touchstart', e => dragBegin(e.touches[0]), {passive:false});
+window.addEventListener('touchmove', e => { if(dragging) e.preventDefault(); dragMove(e.touches[0]); }, {passive:false});
+window.addEventListener('touchend', dragEnd);
+
+/* ================= 网格线 ================= */
+function paintCells(){
+  frame.style.gridTemplateRows    = `repeat(${rows}, 1fr)`;
+  frame.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  frame.innerHTML = '';
+  for(let i=0;i<rows*cols;i++){
+    const d = document.createElement('div');
+    d.className = 'fcell';
+    d.innerText = i+1;
+    frame.appendChild(d);
+  }
+}
+
+/* ================= 切片生成 ================= */
+let sliceData = []; // {name,url}
+
+function cut(){
+  if(!fileObj) return;
+  const listView = document.getElementById('listView');
+  const chatGrid = document.getElementById('chatGrid');
+  listView.innerHTML = '';
+  chatGrid.innerHTML = '';
+  chatGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  const sx = crop.x*natW, sy = crop.y*natH;
+  const sw = crop.w*natW, sh = crop.h*natH;
+  const cw = sw/cols, ch = sh/rows;
+  const fmt    = document.getElementById('fmtSel').value;
+  const prefix = document.getElementById('prefixIn').value || 'slice';
+  const ext    = fmt==='image/png' ? 'png' : (fmt==='image/webp' ? 'webp' : 'jpg');
+  sliceData = [];
+
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const cv = document.createElement('canvas');
+      cv.width = cw; cv.height = ch;
+      cv.getContext('2d').drawImage(pic, sx+c*cw, sy+r*ch, cw, ch, 0, 0, cw, ch);
+      const url  = cv.toDataURL(fmt, 0.9);
+      const name = `${prefix}_${r*cols+c+1}.${ext}`;
+      sliceData.push({name, url});
+
+      // 清单条目
+      const item = document.createElement('div');
+      item.className = 'flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 hover:bg-slate-750 transition group';
+      item.innerHTML = `
+        <div class="w-12 h-12 bg-black/50 rounded shrink-0 overflow-hidden border border-slate-600 relative">
+          <div class="absolute inset-0 z-0 opacity-20" style="background-image:radial-gradient(#64748b 1px,transparent 1px);background-size:6px 6px"></div>
+          <img src="${url}" class="w-full h-full object-contain relative z-10">
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-center">
+            <span class="text-[10px] font-bold text-slate-300 truncate">${name}</span>
+            <span class="text-[9px] text-slate-500">${Math.round(cw)}x${Math.round(ch)}</span>
+          </div>
+        </div>`;
+      const btn = document.createElement('button');
+      btn.className = 'bg-indigo-600 hover:bg-indigo-500 text-white w-8 h-8 flex items-center justify-center rounded-full shadow active:scale-90 transition';
+      btn.innerHTML = '<i class="ph ph-download-simple"></i>';
+      btn.addEventListener('click', () => {
+        try{ saveAs(url, name); }catch(e){ alert('请长按图片保存'); }
+      });
+      item.appendChild(btn);
+      listView.appendChild(item);
+
+      // 朋友圈模拟
+      const im = document.createElement('img');
+      im.src = url;
+      if(document.getElementById('squareOn').checked || rows*cols > 1){
+        im.style.aspectRatio = '1/1'; im.style.objectFit = 'cover';
+      } else {
+        im.style.aspectRatio = 'auto'; im.style.maxHeight = '200px';
+      }
+      chatGrid.appendChild(im);
+    }
+  }
+}
+
+/* ================= 视图切换 ================= */
+const tabList = document.getElementById('tabList');
+const tabChat = document.getElementById('tabChat');
+function showView(view){
+  const onCls  = ['bg-slate-800','text-white'];
+  const offCls = ['text-slate-500','hover:bg-slate-800/50'];
+  const active = view==='list' ? tabList : tabChat;
+  const idle   = view==='list' ? tabChat : tabList;
+  active.classList.add(...onCls);  active.classList.remove(...offCls);
+  idle.classList.remove(...onCls); idle.classList.add(...offCls);
+  document.getElementById('listView').classList.toggle('hidden', view!=='list');
+  document.getElementById('chatView').classList.toggle('hidden', view==='list');
+}
+tabList.addEventListener('click', () => showView('list'));
+tabChat.addEventListener('click', () => showView('chat'));
+
+/* ================= 打包下载 ================= */
+document.getElementById('fmtSel').addEventListener('change', cut);
+document.getElementById('packBtn').addEventListener('click', async () => {
+  if(!fileObj) return;
+  const btn = document.getElementById('packBtn');
+  const old = btn.innerHTML;
+  btn.innerHTML = '<i class="ph ph-spinner animate-spin"></i> 打包中...';
+  btn.disabled = true;
+
+  const zip = new JSZip();
+  const prefix = document.getElementById('prefixIn').value || 'slice';
+  const folder = zip.folder(`${prefix}_files`);
+  sliceData.forEach(s => folder.file(s.name, s.url.split(',')[1], {base64:true}));
+  const blob = await zip.generateAsync({type:'blob'});
+  saveAs(blob, `${prefix}_pack.zip`);
+
+  btn.innerHTML = old;
+  btn.disabled = false;
+});
+
+window.addEventListener('resize', () => { if(fileObj) placeFrame(zoomBar.value/100); });
+</script>
+</body>
+</html>
